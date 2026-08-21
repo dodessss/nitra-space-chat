@@ -33,8 +33,40 @@ let state = 'home'
 let isStopping = false
 let partnerPresent = false
 let messages = []
+let onlineCount = 1
+let onlineChannel = null
 
 const app = document.querySelector('#app')
+
+
+function updateOnlineBadge() {
+  const el = document.querySelector('#onlineCount')
+  if (el) el.textContent = String(onlineCount)
+}
+
+async function setupOnlinePresence() {
+  onlineChannel = supabase.channel('nitra-space-online', {
+    config: {
+      presence: { key: sessionId }
+    }
+  })
+
+  onlineChannel.on('presence', { event: 'sync' }, () => {
+    const presence = onlineChannel.presenceState()
+    onlineCount = Object.keys(presence).length
+    updateOnlineBadge()
+  })
+
+  onlineChannel.subscribe(async status => {
+    if (status === 'SUBSCRIBED') {
+      try {
+        await onlineChannel.track({ session_id: sessionId, online_at: new Date().toISOString() })
+      } catch (error) {
+        console.warn('Online presence tracking failed:', error)
+      }
+    }
+  })
+}
 
 function render() {
   if (state === 'home') renderHome()
@@ -44,6 +76,10 @@ function render() {
 function renderHome() {
   app.innerHTML = `
     <main class="home-shell">
+      <div class="online-badge" aria-live="polite">
+        <span class="online-dot" aria-hidden="true"></span>
+        <span><strong id="onlineCount">${onlineCount}</strong> online</span>
+      </div>
       <section class="home-card">
         <div class="brand-line">
           <span class="brand-mark" aria-hidden="true">NS</span>
@@ -160,7 +196,13 @@ function renderChat() {
           <span class="brand-dot" aria-hidden="true"></span>
           <strong>Nitra Space Chat</strong>
         </button>
-        <span class="privacy-label">TEXT • ANONYMNÉ • BEZ HISTÓRIE</span>
+        <div class="header-right">
+          <span class="privacy-label">TEXT • ANONYMNÉ • BEZ HISTÓRIE</span>
+          <span class="online-badge online-badge-header" aria-live="polite">
+            <span class="online-dot" aria-hidden="true"></span>
+            <span><strong id="onlineCount">${onlineCount}</strong> online</span>
+          </span>
+        </div>
       </header>
 
       <section class="chat-window" aria-label="Anonymný chat">
@@ -451,3 +493,4 @@ window.addEventListener('beforeunload', () => {
 })
 
 render()
+setupOnlinePresence()
