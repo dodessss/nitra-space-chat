@@ -47,6 +47,26 @@ const partnerTypingFallbackDelay = 2200
 
 const app = document.querySelector('#app')
 const themeKey = 'nitra-space-chat-theme'
+let viewportFrame = null
+let viewportScrollTimer = null
+
+function scheduleScrollToBottom() {
+  if (state === 'home') return
+  if (viewportFrame) cancelAnimationFrame(viewportFrame)
+
+  viewportFrame = requestAnimationFrame(() => {
+    viewportFrame = null
+    scrollMessages()
+    clearTimeout(viewportScrollTimer)
+    viewportScrollTimer = setTimeout(scrollMessages, 120)
+  })
+}
+
+function updateAppHeight() {
+  const viewportHeight = window.visualViewport?.height || window.innerHeight
+  document.documentElement.style.setProperty('--app-height', `${Math.round(viewportHeight)}px`)
+  scheduleScrollToBottom()
+}
 
 function getPreferredTheme() {
   const savedTheme = localStorage.getItem(themeKey)
@@ -119,6 +139,7 @@ async function setupOnlinePresence() {
 }
 
 function render() {
+  document.body.classList.toggle('chat-active', state !== 'home')
   if (state === 'home') renderHome()
   else renderChat()
 }
@@ -299,7 +320,10 @@ function renderChat() {
     input.style.height = 'auto'
     input.style.height = `${Math.min(input.scrollHeight, 120)}px`
     handleTypingInput(input.value)
+    scheduleScrollToBottom()
   })
+
+  input?.addEventListener('focus', scheduleScrollToBottom)
 
   if (state === 'connected') setTimeout(() => input?.focus(), 0)
   scrollMessages()
@@ -639,5 +663,14 @@ window.addEventListener('beforeunload', () => {
 })
 
 applyTheme(getPreferredTheme())
+updateAppHeight()
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', updateAppHeight, { passive: true })
+  window.visualViewport.addEventListener('scroll', updateAppHeight, { passive: true })
+} else {
+  window.addEventListener('resize', updateAppHeight, { passive: true })
+}
+
 render()
 setupOnlinePresence()
