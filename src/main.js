@@ -38,8 +38,12 @@ let onlineChannel = null
 let partnerTyping = false
 let localTypingSent = false
 let typingStopTimer = null
+let partnerTypingTimer = null
+let lastTypingBroadcastAt = 0
 
 const typingIdleDelay = 1200
+const typingHeartbeatDelay = 800
+const partnerTypingFallbackDelay = 2200
 
 const app = document.querySelector('#app')
 const themeKey = 'nitra-space-chat-theme'
@@ -349,22 +353,51 @@ function clearTypingTimer() {
   typingStopTimer = null
 }
 
-async function setLocalTyping(isTyping) {
-  clearTypingTimer()
-  if (localTypingSent === isTyping) return
+function clearPartnerTypingTimer() {
+  if (!partnerTypingTimer) return
+  clearTimeout(partnerTypingTimer)
+  partnerTypingTimer = null
+}
+
+async function setLocalTyping(isTyping, force = false) {
+  if (!isTyping) clearTypingTimer()
+  if (!force && localTypingSent === isTyping) return
   localTypingSent = isTyping
+  lastTypingBroadcastAt = isTyping ? Date.now() : 0
   if (state === 'connected' && channel) await broadcast('typing', { typing: isTyping })
+}
+
+function setPartnerTyping(isTyping) {
+  clearPartnerTypingTimer()
+  partnerTyping = state === 'connected' && isTyping
+
+  if (partnerTyping) {
+    partnerTypingTimer = setTimeout(() => {
+      partnerTyping = false
+      partnerTypingTimer = null
+      refreshMessages()
+    }, partnerTypingFallbackDelay)
+  }
+
+  refreshMessages()
 }
 
 function handleTypingInput(value) {
   if (state !== 'connected' || !channel) return
 
   if (!value.trim()) {
+    clearTypingTimer()
     void setLocalTyping(false)
     return
   }
 
-  if (!localTypingSent) void setLocalTyping(true)
+  const now = Date.now()
+  if (!localTypingSent) {
+    void setLocalTyping(true)
+  } else if (now - lastTypingBroadcastAt >= typingHeartbeatDelay) {
+    void setLocalTyping(true, true)
+  }
+
   clearTypingTimer()
   typingStopTimer = setTimeout(() => {
     void setLocalTyping(false)
@@ -373,7 +406,9 @@ function handleTypingInput(value) {
 
 function resetTypingState() {
   clearTypingTimer()
+  clearPartnerTypingTimer()
   localTypingSent = false
+  lastTypingBroadcastAt = 0
   partnerTyping = false
 }
 
@@ -431,6 +466,7 @@ async function joinRoom(partnerSessionId) {
     .on('broadcast', { event: 'message' }, ({ payload }) => {
       if (payload?.sender === sessionId) return
       if (payload?.room_id !== roomId) return
+      clearPartnerTypingTimer()
       partnerTyping = false
       messages.push({ text: String(payload.text || ''), mine: false })
       refreshMessages()
@@ -438,11 +474,11 @@ async function joinRoom(partnerSessionId) {
     .on('broadcast', { event: 'typing' }, ({ payload }) => {
       if (payload?.sender === sessionId) return
       if (payload?.room_id !== roomId) return
-      partnerTyping = state === 'connected' && payload?.typing === true
-      refreshMessages()
+      setPartnerTyping(payload?.typing === true)
     })
     .on('broadcast', { event: 'matched' }, ({ payload }) => {
       if (payload?.room_id !== roomId) return
+      clearPartnerTypingTimer()
       partnerTyping = false
       partnerPresent = true
       setStatus('connected')
@@ -450,6 +486,7 @@ async function joinRoom(partnerSessionId) {
     .on('broadcast', { event: 'left' }, ({ payload }) => {
       if (payload?.room_id !== roomId) return
       partnerPresent = false
+      clearPartnerTypingTimer()
       partnerTyping = false
       if (!isStopping) setStatus('ended')
     })
@@ -458,6 +495,7 @@ async function joinRoom(partnerSessionId) {
       const keys = Object.keys(presence)
       if (state === 'connected' && keys.length < 2 && partnerPresent && !isStopping) {
         partnerPresent = false
+        clearPartnerTypingTimer()
         partnerTyping = false
         setStatus('ended')
       }
@@ -465,6 +503,7 @@ async function joinRoom(partnerSessionId) {
     .on('presence', { event: 'leave' }, ({ key }) => {
       if (key !== sessionId && !isStopping && state === 'connected') {
         partnerPresent = false
+        clearPartnerTypingTimer()
         partnerTyping = false
         setStatus('ended')
       }
