@@ -35,8 +35,54 @@ let partnerPresent = false
 let messages = []
 let onlineCount = 1
 let onlineChannel = null
+let partnerTyping = false
+let localTypingSent = false
+let typingStopTimer = null
+
+const typingIdleDelay = 1200
 
 const app = document.querySelector('#app')
+const themeKey = 'nitra-space-chat-theme'
+
+function getPreferredTheme() {
+  const savedTheme = localStorage.getItem(themeKey)
+  if (savedTheme === 'light' || savedTheme === 'dark') return savedTheme
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme
+  document.documentElement.style.colorScheme = theme
+  document.querySelector('meta[name="theme-color"]')?.setAttribute(
+    'content',
+    theme === 'dark' ? '#0a0a0a' : '#f7f7f8'
+  )
+}
+
+function toggleTheme() {
+  const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+  localStorage.setItem(themeKey, nextTheme)
+  applyTheme(nextTheme)
+  updateThemeButtons()
+}
+
+function updateThemeButtons() {
+  const isDark = document.documentElement.dataset.theme === 'dark'
+  document.querySelectorAll('[data-theme-toggle]').forEach(button => {
+    button.setAttribute('aria-label', isDark ? 'Zapnúť svetlý režim' : 'Zapnúť tmavý režim')
+    button.setAttribute('title', isDark ? 'Svetlý režim' : 'Tmavý režim')
+    button.innerHTML = isDark
+      ? '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path></svg>'
+      : '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20.8 15.1A9 9 0 1 1 8.9 3.2a7 7 0 0 0 11.9 11.9Z"></path></svg>'
+  })
+}
+
+function bindThemeButtons() {
+  document.querySelectorAll('[data-theme-toggle]').forEach(button => {
+    button.addEventListener('click', toggleTheme)
+  })
+  updateThemeButtons()
+}
 
 
 function updateOnlineBadge() {
@@ -76,27 +122,22 @@ function render() {
 function renderHome() {
   app.innerHTML = `
     <main class="home-shell">
-      <div class="online-badge" aria-live="polite">
-        <span class="online-dot" aria-hidden="true"></span>
-        <span><strong id="onlineCount">${onlineCount}</strong> online</span>
-      </div>
+      <header class="site-header">
+        <strong class="site-name">Nitra Space Chat</strong>
+        <div class="site-actions">
+          <div class="online-badge" aria-live="polite">
+            <span class="online-dot" aria-hidden="true"></span>
+            <span><strong id="onlineCount">${onlineCount}</strong> online</span>
+          </div>
+          <button class="theme-toggle" type="button" data-theme-toggle></button>
+        </div>
+      </header>
+
       <section class="home-card">
-        <div class="brand-line">
-          <span class="brand-mark" aria-hidden="true">NS</span>
-          <span>NITRA SPACE</span>
-        </div>
-
-        <h1>Nitra Space Chat</h1>
-        <p class="home-lead">Anonymný textový chat s náhodným človekom.</p>
-
-        <div class="feature-row" aria-label="Vlastnosti služby">
-          <span>Bez registrácie</span>
-          <span>Len text</span>
-          <span>Bez histórie správ</span>
-        </div>
+        <h1>Porozprávaj sa<br class="desktop-break"> s niekým novým.</h1>
+        <p class="home-lead">Anonymný textový chat. Bez účtu, bez histórie správ.</p>
 
         <button id="openTerms" class="start-btn" type="button">START CHAT</button>
-        <p class="home-note">Pred vstupom potvrdíš pravidlá používania.</p>
       </section>
 
       <div id="termsModal" class="modal-backdrop" hidden>
@@ -155,6 +196,7 @@ function renderHome() {
   const modal = document.querySelector('#termsModal')
   const consent = document.querySelector('#termsConsent')
   const accept = document.querySelector('#acceptAndStart')
+  bindThemeButtons()
 
   const openModal = () => {
     modal.hidden = false
@@ -193,15 +235,14 @@ function renderChat() {
     <main class="chat-page">
       <header class="chat-header">
         <button id="brandHome" class="brand-home" type="button" aria-label="Späť na úvod">
-          <span class="brand-dot" aria-hidden="true"></span>
           <strong>Nitra Space Chat</strong>
         </button>
         <div class="header-right">
-          <span class="privacy-label">TEXT • ANONYMNÉ • BEZ HISTÓRIE</span>
           <span class="online-badge online-badge-header" aria-live="polite">
             <span class="online-dot" aria-hidden="true"></span>
             <span><strong id="onlineCount">${onlineCount}</strong> online</span>
           </span>
+          <button class="theme-toggle" type="button" data-theme-toggle></button>
         </div>
       </header>
 
@@ -211,8 +252,8 @@ function renderChat() {
           <span>${statusText}</span>
         </div>
 
-        <div id="messages" class="transcript" aria-live="polite">
-          ${messages.length ? messages.map(messageTemplate).join('') : emptyTranscript()}
+        <div id="messages" class="transcript ${messages.length || partnerTyping ? '' : 'is-empty'}" aria-live="polite">
+          ${transcriptTemplate()}
         </div>
 
         <div class="controls">
@@ -240,6 +281,7 @@ function renderChat() {
   document.querySelector('#brandHome').addEventListener('click', leaveChat)
   document.querySelector('#next').addEventListener('click', nextChat)
   document.querySelector('#composer').addEventListener('submit', sendMessage)
+  bindThemeButtons()
 
   const input = document.querySelector('#message')
   input?.addEventListener('keydown', event => {
@@ -252,6 +294,7 @@ function renderChat() {
   input?.addEventListener('input', () => {
     input.style.height = 'auto'
     input.style.height = `${Math.min(input.scrollHeight, 120)}px`
+    handleTypingInput(input.value)
   })
 
   if (state === 'connected') setTimeout(() => input?.focus(), 0)
@@ -281,9 +324,57 @@ function emptyTranscript() {
 function messageTemplate(message) {
   return `
     <div class="chat-line ${message.mine ? 'mine' : 'theirs'}">
-      <strong>${message.mine ? 'Ty:' : 'Cudzí:'}</strong>
-      <span>${escapeHtml(message.text)}</span>
+      <span class="message-author">${message.mine ? 'Ty' : 'Cudzí'}</span>
+      <div class="message-bubble">${escapeHtml(message.text)}</div>
     </div>`
+}
+
+function typingTemplate() {
+  if (!partnerTyping || state !== 'connected') return ''
+  return `
+    <div class="typing-indicator" role="status">
+      <span>Cudzí píše…</span>
+      <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    </div>`
+}
+
+function transcriptTemplate() {
+  const content = messages.length ? messages.map(messageTemplate).join('') : (partnerTyping ? '' : emptyTranscript())
+  return `${content}${typingTemplate()}`
+}
+
+function clearTypingTimer() {
+  if (!typingStopTimer) return
+  clearTimeout(typingStopTimer)
+  typingStopTimer = null
+}
+
+async function setLocalTyping(isTyping) {
+  clearTypingTimer()
+  if (localTypingSent === isTyping) return
+  localTypingSent = isTyping
+  if (state === 'connected' && channel) await broadcast('typing', { typing: isTyping })
+}
+
+function handleTypingInput(value) {
+  if (state !== 'connected' || !channel) return
+
+  if (!value.trim()) {
+    void setLocalTyping(false)
+    return
+  }
+
+  if (!localTypingSent) void setLocalTyping(true)
+  clearTypingTimer()
+  typingStopTimer = setTimeout(() => {
+    void setLocalTyping(false)
+  }, typingIdleDelay)
+}
+
+function resetTypingState() {
+  clearTypingTimer()
+  localTypingSent = false
+  partnerTyping = false
 }
 
 function escapeHtml(value) {
@@ -299,6 +390,7 @@ function setStatus(nextState) {
 
 async function startChat() {
   if (isStopping) return
+  resetTypingState()
   state = 'searching'
   messages = []
   partnerPresent = false
@@ -339,17 +431,26 @@ async function joinRoom(partnerSessionId) {
     .on('broadcast', { event: 'message' }, ({ payload }) => {
       if (payload?.sender === sessionId) return
       if (payload?.room_id !== roomId) return
+      partnerTyping = false
       messages.push({ text: String(payload.text || ''), mine: false })
+      refreshMessages()
+    })
+    .on('broadcast', { event: 'typing' }, ({ payload }) => {
+      if (payload?.sender === sessionId) return
+      if (payload?.room_id !== roomId) return
+      partnerTyping = state === 'connected' && payload?.typing === true
       refreshMessages()
     })
     .on('broadcast', { event: 'matched' }, ({ payload }) => {
       if (payload?.room_id !== roomId) return
+      partnerTyping = false
       partnerPresent = true
       setStatus('connected')
     })
     .on('broadcast', { event: 'left' }, ({ payload }) => {
       if (payload?.room_id !== roomId) return
       partnerPresent = false
+      partnerTyping = false
       if (!isStopping) setStatus('ended')
     })
     .on('presence', { event: 'sync' }, () => {
@@ -357,12 +458,14 @@ async function joinRoom(partnerSessionId) {
       const keys = Object.keys(presence)
       if (state === 'connected' && keys.length < 2 && partnerPresent && !isStopping) {
         partnerPresent = false
+        partnerTyping = false
         setStatus('ended')
       }
     })
     .on('presence', { event: 'leave' }, ({ key }) => {
       if (key !== sessionId && !isStopping && state === 'connected') {
         partnerPresent = false
+        partnerTyping = false
         setStatus('ended')
       }
     })
@@ -409,6 +512,7 @@ async function sendMessage(event) {
   messages.push({ text, mine: true })
   input.value = ''
   input.style.height = 'auto'
+  await setLocalTyping(false)
   refreshMessages()
   await broadcast('message', { text })
   input.focus()
@@ -417,7 +521,8 @@ async function sendMessage(event) {
 function refreshMessages() {
   const list = document.querySelector('#messages')
   if (!list) return
-  list.innerHTML = messages.length ? messages.map(messageTemplate).join('') : emptyTranscript()
+  list.classList.toggle('is-empty', !messages.length && !partnerTyping)
+  list.innerHTML = transcriptTemplate()
   scrollMessages()
 }
 
@@ -430,6 +535,7 @@ async function closeCurrentRoom() {
   if (!roomId) return
 
   try {
+    await setLocalTyping(false)
     await broadcast('left', {})
     await supabase.rpc('close_chat_room', { p_room_id: roomId })
   } catch (error) {
@@ -440,6 +546,7 @@ async function closeCurrentRoom() {
       channel = null
     }
     roomId = null
+    resetTypingState()
   }
 }
 
@@ -492,5 +599,6 @@ window.addEventListener('beforeunload', () => {
   }
 })
 
+applyTheme(getPreferredTheme())
 render()
 setupOnlinePresence()
